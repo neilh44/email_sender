@@ -1,18 +1,37 @@
 services:
+  # Web service
   - type: web
-    name: email-sender
+    name: emailer-web
     env: python
     buildCommand: pip install -r requirements.txt
-    startCommand: python app.py
+    startCommand: gunicorn app:app
     envVars:
-      - key: SENDER_EMAIL
-        sync: false
-      - key: SENDER_NAME
-        sync: false
-      - key: APP_PASSWORD
-        sync: false
-      - key: EMAIL_DELAY
-        value: 5
-      - key: JSON_FILE_PATH
-        value: spin_analysis_results.json
-    autoDeploy: true
+      - key: REDIS_URL
+        fromService:
+          type: redis
+          name: emailer-redis
+          property: connectionString
+      - key: PYTHON_VERSION
+        value: 3.9.0
+
+  # Worker service for processing email tasks
+  - type: worker
+    name: emailer-worker
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: rq worker email_tasks
+    envVars:
+      - key: REDIS_URL
+        fromService:
+          type: redis
+          name: emailer-redis
+          property: connectionString
+      - key: PYTHON_VERSION
+        value: 3.9.0
+
+  # Redis service
+  - type: redis
+    name: emailer-redis
+    ipAllowList:
+      - source: 0.0.0.0/0
+        description: everywhere

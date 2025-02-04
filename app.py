@@ -14,8 +14,8 @@ load_dotenv()
 app = Flask(__name__)
 
 # Configure Redis
-redis_url = os.getenv('REDIS_URL', 'redis://localhost:6379')
-redis_conn = Redis.from_url(redis_url)
+REDIS_URL = os.getenv('REDIS_URL', 'redis://red-clfmvd6d2npc73dlsq60:6379')
+redis_conn = Redis.from_url(REDIS_URL)
 q = Queue('email_tasks', connection=redis_conn)
 
 # Configure upload folder
@@ -52,6 +52,7 @@ def process_emails(file_path, sender_email, sender_name, app_password, email_del
             os.remove(file_path)
 
         return results
+
     except Exception as e:
         if os.path.exists(file_path):
             os.remove(file_path)
@@ -98,7 +99,8 @@ def send_emails():
                 app_password,
                 email_delay
             ),
-            job_timeout='30m'  # 30 minutes timeout
+            job_timeout='1h',  # 1 hour timeout
+            result_ttl=86400   # Keep results for 24 hours
         )
 
         return jsonify({
