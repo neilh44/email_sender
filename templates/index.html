@@ -50,6 +50,18 @@
             
             <div id="status" class="mt-4 p-4 rounded-md hidden"></div>
             
+            <!-- Progress indicator -->
+            <div id="progress" class="mt-4 hidden">
+                <div class="animate-pulse flex space-x-4">
+                    <div class="flex-1 space-y-4 py-1">
+                        <div class="h-4 bg-blue-200 rounded w-3/4"></div>
+                        <div class="space-y-2">
+                            <div class="h-4 bg-blue-200 rounded"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
             <!-- Results section -->
             <div id="results" class="mt-4 space-y-4 hidden">
                 <h2 class="text-lg font-semibold">Results</h2>
@@ -72,18 +84,86 @@
     </div>
 
     <script>
+        let pollInterval;
+        
+        function pollJobStatus(jobId) {
+            return fetch(`/api/job-status/${jobId}`)
+                .then(response => response.json())
+                .then(data => {
+                    const status = document.getElementById('status');
+                    const progress = document.getElementById('progress');
+                    const results = document.getElementById('results');
+                    
+                    switch(data.status) {
+                        case 'queued':
+                        case 'started':
+                            status.className = 'mt-4 p-4 rounded-md bg-blue-50 text-blue-700';
+                            status.textContent = 'Processing emails...';
+                            progress.classList.remove('hidden');
+                            break;
+                            
+                        case 'finished':
+                            clearInterval(pollInterval);
+                            progress.classList.add('hidden');
+                            
+                            if (data.result) {
+                                status.className = 'mt-4 p-4 rounded-md bg-green-50 text-green-700';
+                                status.textContent = 'Emails sent successfully!';
+                                
+                                // Display results
+                                results.classList.remove('hidden');
+                                
+                                // Update counts
+                                document.getElementById('successCount').textContent = 
+                                    `Successfully sent: ${data.result.successful.length}`;
+                                document.getElementById('failureCount').textContent = 
+                                    `Failed: ${data.result.failed.length}`;
+                                
+                                // Update success list
+                                const successList = document.getElementById('successList');
+                                successList.innerHTML = data.result.successful
+                                    .map(item => `<li>✓ ${item.company} (${item.email})</li>`)
+                                    .join('');
+                                
+                                // Update failure list
+                                const failureList = document.getElementById('failureList');
+                                failureList.innerHTML = data.result.failed
+                                    .map(item => `<li>✗ ${item.company}: ${item.error}</li>`)
+                                    .join('');
+                            }
+                            break;
+                            
+                        case 'failed':
+                            clearInterval(pollInterval);
+                            status.className = 'mt-4 p-4 rounded-md bg-red-50 text-red-700';
+                            status.textContent = `Error: ${data.error || 'Failed to send emails'}`;
+                            progress.classList.add('hidden');
+                            break;
+                    }
+                })
+                .catch(error => {
+                    clearInterval(pollInterval);
+                    const status = document.getElementById('status');
+                    status.className = 'mt-4 p-4 rounded-md bg-red-50 text-red-700';
+                    status.textContent = `Error: ${error.message}`;
+                    document.getElementById('progress').classList.add('hidden');
+                });
+        }
+
         document.getElementById('configForm').addEventListener('submit', async (e) => {
             e.preventDefault();
             
             const form = e.target;
             const status = document.getElementById('status');
             const results = document.getElementById('results');
+            const progress = document.getElementById('progress');
             
-            // Show processing status
+            // Reset and show status
             status.className = 'mt-4 p-4 rounded-md bg-blue-50 text-blue-700';
-            status.textContent = 'Processing...';
+            status.textContent = 'Starting email process...';
             status.classList.remove('hidden');
             results.classList.add('hidden');
+            progress.classList.add('hidden');
             
             // Create FormData object
             const formData = new FormData(form);
@@ -97,36 +177,18 @@
                 const data = await response.json();
                 
                 if (response.ok) {
-                    // Update status
-                    status.className = 'mt-4 p-4 rounded-md bg-green-50 text-green-700';
-                    status.textContent = data.message;
+                    // Show progress indicator
+                    progress.classList.remove('hidden');
                     
-                    // Display results
-                    results.classList.remove('hidden');
-                    
-                    // Update counts
-                    document.getElementById('successCount').textContent = 
-                        `Successfully sent: ${data.results.successful.length}`;
-                    document.getElementById('failureCount').textContent = 
-                        `Failed: ${data.results.failed.length}`;
-                    
-                    // Update success list
-                    const successList = document.getElementById('successList');
-                    successList.innerHTML = data.results.successful
-                        .map(item => `<li>✓ ${item.company} (${item.email})</li>`)
-                        .join('');
-                    
-                    // Update failure list
-                    const failureList = document.getElementById('failureList');
-                    failureList.innerHTML = data.results.failed
-                        .map(item => `<li>✗ ${item.company}: ${item.error}</li>`)
-                        .join('');
+                    // Start polling for job status
+                    pollInterval = setInterval(() => pollJobStatus(data.job_id), 2000);
                 } else {
-                    throw new Error(data.error || 'Failed to send emails');
+                    throw new Error(data.error || 'Failed to start email process');
                 }
             } catch (error) {
                 status.className = 'mt-4 p-4 rounded-md bg-red-50 text-red-700';
                 status.textContent = `Error: ${error.message}`;
+                progress.classList.add('hidden');
             }
         });
     </script>
