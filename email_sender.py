@@ -20,6 +20,11 @@ class EmailSender:
         self.app_password = app_password
         self.delay = delay
         self.server = None
+        self.should_stop = False
+
+    def stop_sending(self):
+        self.should_stop = True
+        logging.info("Stop signal received")
 
     def connect_to_smtp(self):
         try:
@@ -37,15 +42,6 @@ class EmailSender:
             self.server.quit()
             logging.info("SMTP connection closed")
 
-    def create_email_content(self, company_data):
-        """Create email subject and body based on company data"""
-        company_name = company_data['company_name']
-        email_template = company_data['analysis']['partnership_email']
-        subject = email_template['subject']
-        body = email_template['body'].replace("[Your Name]", self.sender_name)
-        
-        return subject, body
-
     def create_email_message(self, recipient_email, company_name, subject, body):
         msg = MIMEMultipart()
         msg['From'] = formataddr((self.sender_name, self.sender_email))
@@ -56,13 +52,26 @@ class EmailSender:
 
     def send_single_email(self, company_data):
         try:
+            if self.should_stop:
+                return {
+                    'status': 'stopped',
+                    'company': company_data.get('company_name', 'Unknown'),
+                    'message': 'Email sending was stopped'
+                }
+
             recipient_email = company_data.get('contact_email')
             if not recipient_email:
                 logging.error(f"No email found for company {company_data.get('company_name', 'Unknown')}")
-                return False
+                return {
+                    'status': 'failed',
+                    'company': company_data.get('company_name', 'Unknown'),
+                    'error': 'No email address found'
+                }
 
             company_name = company_data['company_name']
-            subject, body = self.create_email_content(company_data)
+            email_template = company_data['analysis']['partnership_email']
+            subject = email_template['subject']
+            body = email_template['body'].replace("[Your Name]", self.sender_name)
             
             msg = self.create_email_message(recipient_email, company_name, subject, body)
             self.server.send_message(msg)
@@ -88,21 +97,28 @@ class EmailSender:
         results = {
             'successful': [],
             'failed': [],
-            'total': len(companies_data)
+            'stopped': False,
+            'total': len(companies_data),
+            'processed': 0
         }
         
         try:
             self.connect_to_smtp()
             
             for company in companies_data:
+                if self.should_stop:
+                    results['stopped'] = True
+                    break
+
                 result = self.send_single_email(company)
+                results['processed'] += 1
                 
                 if result['status'] == 'success':
                     results['successful'].append(result)
-                else:
+                elif result['status'] == 'failed':
                     results['failed'].append(result)
                 
-                if self.delay > 0 and len(companies_data) > 1:
+                if not self.should_stop and self.delay > 0 and companies_data.index(company) < len(companies_data) - 1:
                     time.sleep(self.delay)
                     
         except Exception as e:

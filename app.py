@@ -18,6 +18,9 @@ app = Flask(__name__)
 REDIS_URL = os.getenv('REDIS_URL', 'redis://red-clfmvd6d2npc73dlsq60:6379')
 redis_client = redis.from_url(REDIS_URL)
 
+# Store active email senders
+active_senders = {}
+
 # Configure upload folder
 UPLOAD_FOLDER = 'uploads'
 ALLOWED_EXTENSIONS = {'json'}
@@ -42,6 +45,9 @@ def process_emails_task(job_id, file_path, sender_email, sender_name, app_passwo
             app_password=app_password,
             delay=email_delay
         )
+        
+        # Store sender instance
+        active_senders[job_id] = sender
 
         # Read JSON file
         with open(file_path, 'r') as f:
@@ -51,7 +57,11 @@ def process_emails_task(job_id, file_path, sender_email, sender_name, app_passwo
         results = sender.process_companies(companies_data)
         
         # Store results in Redis
-        redis_client.hset(f"job:{job_id}", "status", "completed")
+        if sender.should_stop:
+            redis_client.hset(f"job:{job_id}", "status", "stopped")
+        else:
+            redis_client.hset(f"job:{job_id}", "status", "completed")
+            
         redis_client.hset(f"job:{job_id}", "results", json.dumps(results))
         redis_client.expire(f"job:{job_id}", 86400)  # Expire after 24 hours
 
@@ -63,6 +73,8 @@ def process_emails_task(job_id, file_path, sender_email, sender_name, app_passwo
         # Clean up
         if os.path.exists(file_path):
             os.remove(file_path)
+        # Remove sender instance
+        active_senders.pop(job_id, None)
 
 @app.route('/')
 def index():
@@ -124,6 +136,19 @@ def send_emails():
             'error': str(e)
         }), 500
 
+@app.route('/api/stop-job/<job_id>', methods=['POST'])
+def stop_job(job_id):
+    sender = active_senders.get(job_id)
+    if sender:
+        sender.stop_sending()
+        return jsonify({
+            'success': True,
+            'message': 'Stop signal sent to job'
+        })
+    return jsonify({
+        'error': 'Job not found or already completed'
+    }), 404
+
 @app.route('/api/job-status/<job_id>')
 def job_status(job_id):
     job_key = f"job:{job_id}"
@@ -136,12 +161,14 @@ def job_status(job_id):
         'status': status
     }
 
-    if status == 'completed':
+    if status in ['completed', 'stopped']:
         results = redis_client.hget(job_key, "results")
-        response['result'] = json.loads(results.decode('utf-8'))
+        if results:
+            response['result'] = json.loads(results.decode('utf-8'))
     elif status == 'failed':
         error = redis_client.hget(job_key, "error")
-        response['error'] = error.decode('utf-8')
+        if error:
+            response['error'] = error.decode('utf-8')
 
     return jsonify(response)
 

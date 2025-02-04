@@ -42,155 +42,211 @@
                            class="mt-1 block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100">
                 </div>
                 
-                <button type="submit" 
+                <button type="submit" id="startButton"
                         class="w-full flex justify-center py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500">
-                    Start Sending Emails
-                </button>
-            </form>
-            
-            <div id="status" class="mt-4 p-4 rounded-md hidden"></div>
-            
-            <!-- Progress indicator -->
-            <div id="progress" class="mt-4 hidden">
-                <div class="animate-pulse flex space-x-4">
-                    <div class="flex-1 space-y-4 py-1">
-                        <div class="h-4 bg-blue-200 rounded w-3/4"></div>
-                        <div class="space-y-2">
-                            <div class="h-4 bg-blue-200 rounded"></div>
-                        </div>
+                        Start Sending Emails
+                    </button>
+                </form>
+                
+                <div id="controlPanel" class="mt-4 hidden">
+                    <button id="stopButton" 
+                            class="w-full flex justify-center py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-red-600 hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500">
+                        Stop Sending Emails
+                    </button>
+                </div>
+                
+                <div id="status" class="mt-4 p-4 rounded-md hidden"></div>
+                
+                <!-- Progress section -->
+                <div id="progress" class="mt-4 space-y-2 hidden">
+                    <div class="flex justify-between text-sm text-gray-600">
+                        <span>Progress:</span>
+                        <span id="progressCount">0/0</span>
+                    </div>
+                    <div class="w-full bg-gray-200 rounded-full h-2.5">
+                        <div id="progressBar" class="bg-blue-600 h-2.5 rounded-full" style="width: 0%"></div>
+                    </div>
+                </div>
+                
+                <!-- Results section -->
+                <div id="results" class="mt-4 space-y-4 hidden">
+                    <h2 class="text-lg font-semibold">Results</h2>
+                    <div class="space-y-2">
+                        <div id="successCount" class="text-green-600"></div>
+                        <div id="failureCount" class="text-red-600"></div>
+                    </div>
+                    
+                    <div class="space-y-2">
+                        <h3 class="font-medium">Successful Emails:</h3>
+                        <ul id="successList" class="text-sm text-gray-600 space-y-1"></ul>
+                    </div>
+                    
+                    <div class="space-y-2">
+                        <h3 class="font-medium">Failed Emails:</h3>
+                        <ul id="failureList" class="text-sm text-red-600 space-y-1"></ul>
                     </div>
                 </div>
             </div>
-            
-            <!-- Results section -->
-            <div id="results" class="mt-4 space-y-4 hidden">
-                <h2 class="text-lg font-semibold">Results</h2>
-                <div class="space-y-2">
-                    <div id="successCount" class="text-green-600"></div>
-                    <div id="failureCount" class="text-red-600"></div>
-                </div>
-                
-                <div class="space-y-2">
-                    <h3 class="font-medium">Successful Emails:</h3>
-                    <ul id="successList" class="text-sm text-gray-600 space-y-1"></ul>
-                </div>
-                
-                <div class="space-y-2">
-                    <h3 class="font-medium">Failed Emails:</h3>
-                    <ul id="failureList" class="text-sm text-red-600 space-y-1"></ul>
-                </div>
-            </div>
         </div>
-    </div>
-
-    <script>
-        let pollInterval;
-        
-        function pollJobStatus(jobId) {
-            return fetch(`/api/job-status/${jobId}`)
-                .then(response => response.json())
-                .then(data => {
-                    const status = document.getElementById('status');
-                    const progress = document.getElementById('progress');
-                    const results = document.getElementById('results');
+    
+        <script>
+            let pollInterval;
+            let currentJobId;
+            
+            function updateProgress(processed, total) {
+                const progressBar = document.getElementById('progressBar');
+                const progressCount = document.getElementById('progressCount');
+                const percentage = (processed / total) * 100;
+                
+                progressBar.style.width = `${percentage}%`;
+                progressCount.textContent = `${processed}/${total}`;
+            }
+            
+            function stopEmailSending() {
+                if (currentJobId) {
+                    fetch(`/api/stop-job/${currentJobId}`, {
+                        method: 'POST'
+                    })
+                    .then(response => response.json())
+                    .then(data => {
+                        if (data.success) {
+                            const status = document.getElementById('status');
+                            status.className = 'mt-4 p-4 rounded-md bg-yellow-50 text-yellow-700';
+                            status.textContent = 'Stopping email sending process...';
+                        }
+                    })
+                    .catch(error => console.error('Error stopping job:', error));
+                }
+            }
+            
+            function pollJobStatus(jobId) {
+                return fetch(`/api/job-status/${jobId}`)
+                    .then(response => response.json())
+                    .then(data => {
+                        const status = document.getElementById('status');
+                        const progress = document.getElementById('progress');
+                        const results = document.getElementById('results');
+                        const controlPanel = document.getElementById('controlPanel');
+                        
+                        if (data.result) {
+                            updateProgress(data.result.processed, data.result.total);
+                        }
+                        
+                        switch(data.status) {
+                            case 'queued':
+                            case 'processing':
+                                status.className = 'mt-4 p-4 rounded-md bg-blue-50 text-blue-700';
+                                status.textContent = 'Processing emails...';
+                                progress.classList.remove('hidden');
+                                controlPanel.classList.remove('hidden');
+                                break;
+                                
+                            case 'completed':
+                            case 'stopped':
+                                clearInterval(pollInterval);
+                                progress.classList.add('hidden');
+                                controlPanel.classList.add('hidden');
+                                
+                                if (data.result) {
+                                    status.className = data.status === 'completed' 
+                                        ? 'mt-4 p-4 rounded-md bg-green-50 text-green-700'
+                                        : 'mt-4 p-4 rounded-md bg-yellow-50 text-yellow-700';
+                                    status.textContent = data.status === 'completed'
+                                        ? 'Emails sent successfully!'
+                                        : 'Email sending was stopped';
+                                    
+                                    // Display results
+                                    results.classList.remove('hidden');
+                                    
+                                    // Update counts
+                                    document.getElementById('successCount').textContent = 
+                                        `Successfully sent: ${data.result.successful.length}`;
+                                    document.getElementById('failureCount').textContent = 
+                                        `Failed: ${data.result.failed.length}`;
+                                    
+                                    // Update success list
+                                    const successList = document.getElementById('successList');
+                                    successList.innerHTML = data.result.successful
+                                        .map(item => `<li>✓ ${item.company} (${item.email})</li>`)
+                                        .join('');
+                                    
+                                    // Update failure list
+                                    const failureList = document.getElementById('failureList');
+                                    failureList.innerHTML = data.result.failed
+                                        .map(item => `<li>✗ ${item.company}: ${item.error}</li>`)
+                                        .join('');
+                                }
+                                break;
+                                
+                            case 'failed':
+                                clearInterval(pollInterval);
+                                status.className = 'mt-4 p-4 rounded-md bg-red-50 text-red-700';
+                                status.textContent = `Error: ${data.error || 'Failed to send emails'}`;
+                                progress.classList.add('hidden');
+                                controlPanel.classList.add('hidden');
+                                break;
+                        }
+                    })
+                    .catch(error => {
+                        clearInterval(pollInterval);
+                        const status = document.getElementById('status');
+                        status.className = 'mt-4 p-4 rounded-md bg-red-50 text-red-700';
+                        status.textContent = `Error: ${error.message}`;
+                        document.getElementById('progress').classList.add('hidden');
+                        document.getElementById('controlPanel').classList.add('hidden');
+                    });
+            }
+    
+            document.getElementById('configForm').addEventListener('submit', async (e) => {
+                e.preventDefault();
+                
+                const form = e.target;
+                const status = document.getElementById('status');
+                const results = document.getElementById('results');
+                const progress = document.getElementById('progress');
+                const controlPanel = document.getElementById('controlPanel');
+                
+                // Reset and show status
+                status.className = 'mt-4 p-4 rounded-md bg-blue-50 text-blue-700';
+                status.textContent = 'Starting email process...';
+                status.classList.remove('hidden');
+                results.classList.add('hidden');
+                progress.classList.add('hidden');
+                controlPanel.classList.add('hidden');
+                
+                // Create FormData object
+                const formData = new FormData(form);
+                
+                try {
+                    const response = await fetch('/api/send-emails', {
+                        method: 'POST',
+                        body: formData
+                    });
                     
-                    switch(data.status) {
-                        case 'queued':
-                        case 'started':
-                            status.className = 'mt-4 p-4 rounded-md bg-blue-50 text-blue-700';
-                            status.textContent = 'Processing emails...';
-                            progress.classList.remove('hidden');
-                            break;
-                            
-                        case 'finished':
-                            clearInterval(pollInterval);
-                            progress.classList.add('hidden');
-                            
-                            if (data.result) {
-                                status.className = 'mt-4 p-4 rounded-md bg-green-50 text-green-700';
-                                status.textContent = 'Emails sent successfully!';
-                                
-                                // Display results
-                                results.classList.remove('hidden');
-                                
-                                // Update counts
-                                document.getElementById('successCount').textContent = 
-                                    `Successfully sent: ${data.result.successful.length}`;
-                                document.getElementById('failureCount').textContent = 
-                                    `Failed: ${data.result.failed.length}`;
-                                
-                                // Update success list
-                                const successList = document.getElementById('successList');
-                                successList.innerHTML = data.result.successful
-                                    .map(item => `<li>✓ ${item.company} (${item.email})</li>`)
-                                    .join('');
-                                
-                                // Update failure list
-                                const failureList = document.getElementById('failureList');
-                                failureList.innerHTML = data.result.failed
-                                    .map(item => `<li>✗ ${item.company}: ${item.error}</li>`)
-                                    .join('');
-                            }
-                            break;
-                            
-                        case 'failed':
-                            clearInterval(pollInterval);
-                            status.className = 'mt-4 p-4 rounded-md bg-red-50 text-red-700';
-                            status.textContent = `Error: ${data.error || 'Failed to send emails'}`;
-                            progress.classList.add('hidden');
-                            break;
+                    const data = await response.json();
+                    
+                    if (response.ok) {
+                        // Store job ID
+                        currentJobId = data.job_id;
+                        
+                        // Show progress indicator and control panel
+                        progress.classList.remove('hidden');
+                        controlPanel.classList.remove('hidden');
+                        
+                        // Start polling for job status
+                        pollInterval = setInterval(() => pollJobStatus(data.job_id), 2000);
+                    } else {
+                        throw new Error(data.error || 'Failed to start email process');
                     }
-                })
-                .catch(error => {
-                    clearInterval(pollInterval);
-                    const status = document.getElementById('status');
+                } catch (error) {
                     status.className = 'mt-4 p-4 rounded-md bg-red-50 text-red-700';
                     status.textContent = `Error: ${error.message}`;
-                    document.getElementById('progress').classList.add('hidden');
-                });
-        }
-
-        document.getElementById('configForm').addEventListener('submit', async (e) => {
-            e.preventDefault();
-            
-            const form = e.target;
-            const status = document.getElementById('status');
-            const results = document.getElementById('results');
-            const progress = document.getElementById('progress');
-            
-            // Reset and show status
-            status.className = 'mt-4 p-4 rounded-md bg-blue-50 text-blue-700';
-            status.textContent = 'Starting email process...';
-            status.classList.remove('hidden');
-            results.classList.add('hidden');
-            progress.classList.add('hidden');
-            
-            // Create FormData object
-            const formData = new FormData(form);
-            
-            try {
-                const response = await fetch('/api/send-emails', {
-                    method: 'POST',
-                    body: formData
-                });
-                
-                const data = await response.json();
-                
-                if (response.ok) {
-                    // Show progress indicator
-                    progress.classList.remove('hidden');
-                    
-                    // Start polling for job status
-                    pollInterval = setInterval(() => pollJobStatus(data.job_id), 2000);
-                } else {
-                    throw new Error(data.error || 'Failed to start email process');
+                    progress.classList.add('hidden');
+                    controlPanel.classList.add('hidden');
                 }
-            } catch (error) {
-                status.className = 'mt-4 p-4 rounded-md bg-red-50 text-red-700';
-                status.textContent = `Error: ${error.message}`;
-                progress.classList.add('hidden');
-            }
-        });
-    </script>
-</body>
-</html>
+            });
+    
+            document.getElementById('stopButton').addEventListener('click', stopEmailSending);
+        </script>
+    </body>
+    </html>
