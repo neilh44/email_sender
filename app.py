@@ -4,9 +4,10 @@ from werkzeug.utils import secure_filename
 from email_sender import EmailSender
 import json
 from dotenv import load_dotenv
-from rq import Queue
-from redis import Redis
+import redis
 import uuid
+import threading
+from datetime import datetime
 
 # Load environment variables
 load_dotenv()
@@ -15,8 +16,7 @@ app = Flask(__name__)
 
 # Configure Redis
 REDIS_URL = os.getenv('REDIS_URL', 'redis://red-clfmvd6d2npc73dlsq60:6379')
-redis_conn = Redis.from_url(REDIS_URL)
-q = Queue('email_tasks', connection=redis_conn)
+redis_client = redis.from_url(REDIS_URL)
 
 # Configure upload folder
 UPLOAD_FOLDER = 'uploads'
@@ -30,8 +30,11 @@ app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
-def process_emails(file_path, sender_email, sender_name, app_password, email_delay):
+def process_emails_task(job_id, file_path, sender_email, sender_name, app_password, email_delay):
     try:
+        # Update job status
+        redis_client.hset(f"job:{job_id}", "status", "processing")
+        
         # Initialize EmailSender
         sender = EmailSender(
             sender_email=sender_email,
@@ -46,17 +49,20 @@ def process_emails(file_path, sender_email, sender_name, app_password, email_del
 
         # Process emails
         results = sender.process_companies(companies_data)
+        
+        # Store results in Redis
+        redis_client.hset(f"job:{job_id}", "status", "completed")
+        redis_client.hset(f"job:{job_id}", "results", json.dumps(results))
+        redis_client.expire(f"job:{job_id}", 86400)  # Expire after 24 hours
 
+    except Exception as e:
+        redis_client.hset(f"job:{job_id}", "status", "failed")
+        redis_client.hset(f"job:{job_id}", "error", str(e))
+        redis_client.expire(f"job:{job_id}", 86400)  # Expire after 24 hours
+    finally:
         # Clean up
         if os.path.exists(file_path):
             os.remove(file_path)
-
-        return results
-
-    except Exception as e:
-        if os.path.exists(file_path):
-            os.remove(file_path)
-        raise e
 
 @app.route('/')
 def index():
@@ -82,31 +88,32 @@ def send_emails():
         if not allowed_file(file.filename):
             return jsonify({'error': 'Invalid file type. Please upload a JSON file'}), 400
 
-        # Generate unique filename
-        unique_filename = f"{str(uuid.uuid4())}_{secure_filename(file.filename)}"
+        # Generate unique job ID and filename
+        job_id = str(uuid.uuid4())
+        unique_filename = f"{job_id}_{secure_filename(file.filename)}"
         filepath = os.path.join(app.config['UPLOAD_FOLDER'], unique_filename)
         
         # Save file
         file.save(filepath)
 
-        # Queue the task
-        job = q.enqueue(
-            process_emails,
-            args=(
-                filepath,
-                sender_email,
-                sender_name,
-                app_password,
-                email_delay
-            ),
-            job_timeout='1h',  # 1 hour timeout
-            result_ttl=86400   # Keep results for 24 hours
+        # Initialize job in Redis
+        redis_client.hset(f"job:{job_id}", mapping={
+            "status": "queued",
+            "created_at": datetime.now().isoformat()
+        })
+
+        # Start processing in a thread
+        thread = threading.Thread(
+            target=process_emails_task,
+            args=(job_id, filepath, sender_email, sender_name, app_password, email_delay)
         )
+        thread.daemon = True
+        thread.start()
 
         return jsonify({
             'success': True,
-            'message': 'Email sending task has been queued',
-            'job_id': job.id
+            'message': 'Email sending task has been started',
+            'job_id': job_id
         })
 
     except Exception as e:
@@ -119,19 +126,24 @@ def send_emails():
 
 @app.route('/api/job-status/<job_id>')
 def job_status(job_id):
-    job = q.fetch_job(job_id)
-    
-    if job is None:
+    job_key = f"job:{job_id}"
+    if not redis_client.exists(job_key):
         return jsonify({'error': 'Job not found'}), 404
 
-    status = {
-        'id': job.id,
-        'status': job.get_status(),
-        'result': job.result if job.is_finished else None,
-        'error': str(job.exc_info) if job.is_failed else None
+    status = redis_client.hget(job_key, "status").decode('utf-8')
+    response = {
+        'id': job_id,
+        'status': status
     }
-    
-    return jsonify(status)
+
+    if status == 'completed':
+        results = redis_client.hget(job_key, "results")
+        response['result'] = json.loads(results.decode('utf-8'))
+    elif status == 'failed':
+        error = redis_client.hget(job_key, "error")
+        response['error'] = error.decode('utf-8')
+
+    return jsonify(response)
 
 if __name__ == '__main__':
     app.run(debug=True)
