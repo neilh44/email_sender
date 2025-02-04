@@ -1,0 +1,18 @@
+services:
+  - type: web
+    name: email-sender
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: python app.py
+    envVars:
+      - key: SENDER_EMAIL
+        sync: false
+      - key: SENDER_NAME
+        sync: false
+      - key: APP_PASSWORD
+        sync: false
+      - key: EMAIL_DELAY
+        value: 5
+      - key: JSON_FILE_PATH
+        value: spin_analysis_results.json
+    autoDeploy: true
